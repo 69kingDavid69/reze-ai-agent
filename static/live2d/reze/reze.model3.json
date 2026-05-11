@@ -1,0 +1,72 @@
+{
+  "Version": 3,
+  "FileReferences": {
+    "Moc": "reze.moc3",
+    "Textures": [
+      "textures/texture_00.png",
+      "textures/texture_01.png"
+    ],
+    "Physics": "reze.physics3.json",
+    "Expressions": [
+      { "Name": "cubrir_cara",  "File": "exp/1.exp3.json" },
+      { "Name": "paz",          "File": "exp/2.exp3.json" },
+      { "Name": "foto",         "File": "exp/3.exp3.json" },
+      { "Name": "rubor",        "File": "exp/4.exp3.json" },
+      { "Name": "enojo",        "File": "exp/5.exp3.json" },
+      { "Name": "llanto",       "File": "exp/6.exp3.json" },
+      { "Name": "sudor",        "File": "exp/7.exp3.json" },
+      { "Name": "estrellas",    "File": "exp/8.exp3.json" }
+    ],
+    "Motions": {
+      "idle": [
+        { "File": "motions/zhaiyan.motion3.json",      "FadeInTime": 0.5, "FadeOutTime": 0.5 }
+      ],
+      "talk": [
+        { "File": "motions/zhaoxiang.motion3.json",    "FadeInTime": 0.3, "FadeOutTime": 0.3 }
+      ],
+      "talk_confident": [
+        { "File": "motions/zhaoxiang.motion3.json",    "FadeInTime": 0.2, "FadeOutTime": 0.3 }
+      ],
+      "kiss": [
+        { "File": "motions/kiss.motion3.json",         "FadeInTime": 0.4, "FadeOutTime": 0.5 }
+      ],
+      "dance_kpop": [
+        { "File": "motions/dance_kpop.motion3.json",   "FadeInTime": 0.3, "FadeOutTime": 0.3 }
+      ],
+      "dance_squat": [
+        { "File": "motions/dance_squat.motion3.json",  "FadeInTime": 0.3, "FadeOutTime": 0.3 }
+      ],
+      "shake": [
+        { "File": "motions/shake.motion3.json",        "FadeInTime": 0.1, "FadeOutTime": 0.3 }
+      ],
+      "nod": [
+        { "File": "motions/nod.motion3.json",          "FadeInTime": 0.2, "FadeOutTime": 0.3 }
+      ],
+      "think": [
+        { "File": "motions/think.motion3.json",        "FadeInTime": 0.4, "FadeOutTime": 0.5 }
+      ],
+      "peace": [
+        { "File": "motions/peace.motion3.json",        "FadeInTime": 0.3, "FadeOutTime": 0.4 }
+      ],
+      "star_eyes": [
+        { "File": "motions/star_eyes.motion3.json",    "FadeInTime": 0.2, "FadeOutTime": 0.4 }
+      ],
+      "cover_face": [
+        { "File": "motions/cover_face.motion3.json",   "FadeInTime": 0.3, "FadeOutTime": 0.5 }
+      ]
+    }
+  },
+  "Groups": [
+    {
+      "Target": "Parameter",
+      "Name": "EyeBlink",
+      "Ids": ["ParamEyeLOpen", "ParamEyeROpen"]
+    },
+    {
+      "Target": "Parameter",
+      "Name": "LipSync",
+      "Ids": ["ParamMouthOpenY"]
+    }
+  ],
+  "HitAreas": []
+}

@@ -1,0 +1,30 @@
+# Secretos
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+env/
+
+# Audio temporales
+*.mp3
+*.wav
+
+# macOS
+.DS_Store
+.AppleDouble
+
+# Claude internal
+.claude/
+skills-lock.json
+
+# Modelo Live2D original (solo usamos /static/live2d/reze/)
+static/live2d/March_7th/
+
+# Editores
+.vscode/
+.idea/

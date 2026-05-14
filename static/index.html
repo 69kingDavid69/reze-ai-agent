@@ -678,10 +678,18 @@
   let sessionId = profile.sessionId
 
   // ── Web Speech API – STT ──
+  // Detección de mobile: en mobile el modo conversación continuo no funciona bien
+  // (cada start() requiere user gesture en iOS, Chrome Android corta a los ~10s),
+  // así que cambiamos a modo single-shot manual.
+  const IS_MOBILE = /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
+  // Lang: 'es-AR' solo lo soporta Chrome desktop. En mobile/iOS fallback a 'es-ES'.
+  // 'es-419' (latam genérico) NO existe en Web Speech API — usar 'es-ES' o 'es-MX'.
+  const STT_LANG = IS_MOBILE ? 'es-ES' : 'es-AR'
+
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
   if (SpeechRecognition) {
     recognition = new SpeechRecognition()
-    recognition.lang            = 'es-AR'
+    recognition.lang            = STT_LANG
     recognition.interimResults  = false
     recognition.maxAlternatives = 1
     recognition.continuous      = false
@@ -695,12 +703,24 @@
       console.warn('[STT] error:', e.error)
       isListening = false
       micBtn.classList.remove('listening')
-      if (convoMode && (e.error === 'no-speech' || e.error === 'aborted')) {
-        setTimeout(() => { if (convoMode && !isBusy) startListening() }, 400)
-      } else if (e.error === 'not-allowed') {
+      if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
         setStatus('Permiso de micrófono denegado.')
         convoMode = false
         updateMicUI()
+      } else if (e.error === 'no-speech') {
+        setStatus('No te escuché — tocá el mic y hablá fuerte.')
+        // En desktop con convoMode, reintentamos. En mobile no — esperá tap del usuario.
+        if (!IS_MOBILE && convoMode) {
+          setTimeout(() => { if (convoMode && !isBusy) startListening() }, 400)
+        } else {
+          convoMode = false
+          updateMicUI()
+          setLive2DState('idle')
+        }
+      } else if (e.error === 'language-not-supported') {
+        // Reintentar con el fallback más universal
+        try { recognition.lang = 'es-ES' } catch {}
+        setStatus('Reintentá tocando el mic.')
       } else {
         setStatus('')
         setLive2DState('idle')
@@ -709,13 +729,41 @@
     recognition.onend = () => {
       isListening = false
       micBtn.classList.remove('listening')
-      if (convoMode && !isBusy) {
+      // En desktop, convoMode reinicia el ciclo. En mobile NO — necesita tap del usuario
+      // porque iOS bloquea start() programático sin user gesture.
+      if (!IS_MOBILE && convoMode && !isBusy) {
         setTimeout(() => { if (convoMode && !isBusy) startListening() }, 200)
+      } else if (IS_MOBILE) {
+        // Mobile = single-shot. Limpiar convoMode para que el próximo tap arranque
+        // una escucha nueva (no toggle-off).
+        convoMode = false
+        updateMicUI()
+        setStatus('')
+        setLive2DState('idle')
       }
     }
   }
 
-  function toggleMic() {
+  // Pre-warm de permiso de micrófono — en mobile esto evita el "mic activo pero no
+  // captura audio" porque el sistema de permisos no se inicializó. Se llama una
+  // sola vez al primer tap del mic.
+  let micWarmed = false
+  async function warmMicPermission() {
+    if (micWarmed) return
+    if (!navigator.mediaDevices?.getUserMedia) { micWarmed = true; return }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      // Cerramos inmediatamente — solo queríamos los permisos. Recognition pedirá
+      // su propio stream cuando lo necesite.
+      stream.getTracks().forEach(t => t.stop())
+      micWarmed = true
+    } catch (err) {
+      console.warn('[mic-warm] permission denied or unavailable:', err)
+      micWarmed = true  // no reintentar — recognition fallará con su propio error
+    }
+  }
+
+  async function toggleMic() {
     if (!recognition) { setStatus('Tu browser no soporta micrófono.'); return }
     if (convoMode) {
       convoMode = false
@@ -725,6 +773,10 @@
       setStatus('')
       setLive2DState('idle')
       return
+    }
+    // En mobile, pedimos permiso de mic primero (acción explícita del usuario)
+    if (IS_MOBILE && !micWarmed) {
+      await warmMicPermission()
     }
     convoMode = true
     updateMicUI()
@@ -912,14 +964,32 @@
         } catch {}
       })
 
-      // Mouse events on the Live2D panel
-      container.addEventListener('mousemove', (e) => {
-        const r  = container.getBoundingClientRect()
-        mouseTarget.x = Math.max(-1, Math.min(1, ((e.clientX - r.left) / r.width)  * 2 - 1))
-        mouseTarget.y = Math.max(-1, Math.min(1, ((e.clientY - r.top)  / r.height) * 2 - 1))
+      // Pointer events on the Live2D panel — unifica mouse + touch para que en móvil
+      // el modelo también siga el dedo. Usamos pointerevents porque iOS Safari 13+
+      // y Chrome Android los soportan bien.
+      function updatePointerFromEvent(clientX, clientY) {
+        const r = container.getBoundingClientRect()
+        mouseTarget.x = Math.max(-1, Math.min(1, ((clientX - r.left) / r.width)  * 2 - 1))
+        mouseTarget.y = Math.max(-1, Math.min(1, ((clientY - r.top)  / r.height) * 2 - 1))
         mouseTarget.active = true
+      }
+      container.addEventListener('pointermove', (e) => {
+        updatePointerFromEvent(e.clientX, e.clientY)
       })
-      container.addEventListener('mouseleave', () => { mouseTarget.active = false })
+      container.addEventListener('pointerdown', (e) => {
+        updatePointerFromEvent(e.clientX, e.clientY)
+      })
+      container.addEventListener('pointerleave', () => { mouseTarget.active = false })
+      // Touch fallback explícito (algunos browsers no firan pointerevents para touch puro)
+      container.addEventListener('touchmove', (e) => {
+        const t = e.touches[0]
+        if (t) updatePointerFromEvent(t.clientX, t.clientY)
+      }, { passive: true })
+      container.addEventListener('touchend', () => {
+        // En mobile, mantenemos active corto después del toque para que la mirada quede
+        // donde tocó. Después de 2s vuelve a idle sway.
+        setTimeout(() => { mouseTarget.active = false }, 2000)
+      })
 
       // Resize handler
       window.addEventListener('resize', () => {
@@ -1400,6 +1470,21 @@
         notes:      profile.notes,
       }),
     }).catch(() => {})
+  }
+
+  // ── Onboarding primera visita ──
+  // Si nunca puso nombre, abrimos el modal de perfil después de un segundo
+  // para que Reze pueda llamarlo bien desde el primer mensaje.
+  const FIRST_VISIT_KEY = 'reze.firstVisit.v1'
+  if (!profile.name && !localStorage.getItem(FIRST_VISIT_KEY)) {
+    localStorage.setItem(FIRST_VISIT_KEY, '1')
+    setTimeout(() => {
+      const subtitleEl = document.querySelector('#profile-modal .subtitle')
+      if (subtitleEl) {
+        subtitleEl.textContent = 'Antes de empezar — decile a Reze cómo llamarte. Después podés volver a editar esto cuando quieras.'
+      }
+      openProfile()
+    }, 800)
   }
 
   // ── Init ──

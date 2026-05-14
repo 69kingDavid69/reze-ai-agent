@@ -1,7 +1,7 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi import FastAPI, HTTPException, UploadFile, File, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 from dotenv import load_dotenv
 from elevenlabs.client import ElevenLabs
 from elevenlabs import VoiceSettings
@@ -13,6 +13,7 @@ import os
 import re
 import sqlite3
 import time
+from collections import defaultdict
 from contextlib import contextmanager
 
 # Mime types custom para que iOS Safari NO intente decodificar archivos binarios
@@ -24,6 +25,47 @@ mimetypes.add_type("application/json",         ".motion3.json")
 mimetypes.add_type("application/json",         ".exp3.json")
 mimetypes.add_type("application/json",         ".physics3.json")
 mimetypes.add_type("application/json",         ".cdi3.json")
+
+# ── Rate limiting (in-memory sliding window) ─────────────────────────────────
+# Protege la API key de spammers. Límite conservador para uso personal + demos.
+RATE_LIMIT_REQUESTS = 20   # máx requests
+RATE_LIMIT_WINDOW   = 60   # por ventana de N segundos
+_rate_cache: dict[str, list[float]] = defaultdict(list)
+
+def check_rate_limit(session_id: str) -> None:
+    """Lanza 429 si la sesión superó el rate limit. Limpia timestamps viejos."""
+    now = time.time()
+    window_start = now - RATE_LIMIT_WINDOW
+    timestamps = _rate_cache[session_id]
+    # Descartar timestamps fuera de la ventana actual
+    _rate_cache[session_id] = [t for t in timestamps if t > window_start]
+    if len(_rate_cache[session_id]) >= RATE_LIMIT_REQUESTS:
+        raise HTTPException(
+            status_code=429,
+            detail={"error": "rate_limited",
+                    "message": f"Máx {RATE_LIMIT_REQUESTS} mensajes por minuto."}
+        )
+    _rate_cache[session_id].append(now)
+
+# ── Sanitización de notas de perfil ──────────────────────────────────────────
+# Elimina líneas que parecen instrucciones inyectadas en el campo "notes" del
+# perfil (ej. "Ignore all previous instructions", "System: ...", etc.).
+# No filtramos por palabras sueltas — solo patrones de instrucción directa.
+_INJECTION_PATTERNS = re.compile(
+    r"^\s*(ignore|forget|disregard|override|system:|instructions?:|new\s+instructions?|"
+    r"you are now|act as|pretend|roleplay as|your new|from now on|"
+    r"ignore previous|olvida\s+(tus|las|todo)|nuevas?\s+instrucciones|"
+    r"ahora\s+(sos|eres)|instrucciones?\s*:|sistema\s*:)",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+def sanitize_notes(text: str | None) -> str:
+    if not text:
+        return ""
+    lines = text.splitlines()
+    clean  = [l for l in lines if not _INJECTION_PATTERNS.match(l)]
+    return "\n".join(clean).strip()[:600]  # máx 600 chars
+
 
 from persona import (
     REZE_SYSTEM_PROMPT,
@@ -311,8 +353,8 @@ def _extract_name_hint(facts: list[str]) -> str:
 
 
 class ChatRequest(BaseModel):
-    message: str
-    session_id: str
+    message:    str = Field(..., min_length=1, max_length=1000)
+    session_id: str = Field(..., min_length=1, max_length=128)
 
 
 FALLBACK = {"emocion": "neutral", "motion": "talk"}
@@ -444,6 +486,7 @@ def generate_reply(history: list[dict], state: SessionState, user_message: str,
 
 @app.post("/chat")
 def chat(req: ChatRequest):
+    check_rate_limit(req.session_id)
     session = get_session(req.session_id)
     result  = generate_reply(session["history"], session["state"], req.message,
                              session_id=req.session_id)
@@ -452,11 +495,16 @@ def chat(req: ChatRequest):
 
 
 class ProfileRequest(BaseModel):
-    session_id: str
-    name: str | None = None
-    pronouns: str | None = None
-    gender: str | None = None
-    notes: str | None = None
+    session_id: str       = Field(..., min_length=1, max_length=128)
+    name:       str | None = Field(default=None, max_length=60)
+    pronouns:   str | None = Field(default=None, max_length=40)
+    gender:     str | None = Field(default=None, max_length=60)
+    notes:      str | None = Field(default=None, max_length=600)
+
+    @field_validator("notes", mode="before")
+    @classmethod
+    def strip_injection_from_notes(cls, v):
+        return sanitize_notes(v) if v else v
 
 
 @app.get("/profile")

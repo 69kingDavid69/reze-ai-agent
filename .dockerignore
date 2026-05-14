@@ -1,0 +1,26 @@
+.git
+.gitignore
+.claude
+.venv
+venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+.mypy_cache
+.DS_Store
+.env
+.env.*
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+node_modules
+*.log
+README.md
+DEPLOY.md
+# Modelo grande y archivos de assets/PSD que no necesita el server
+assets/
+# Worktrees — no necesarios en la imagen
+.claude/worktrees/

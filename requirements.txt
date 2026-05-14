@@ -1,8 +1,21 @@
-elevenlabs>=2.46.0
-openai>=1.50.0
-python-dotenv>=1.0.0
-SpeechRecognition>=3.10.0
-pyaudio>=0.2.14
+# Web framework
 fastapi>=0.115.0
-uvicorn>=0.30.0
+uvicorn[standard]>=0.30.0
 python-multipart>=0.0.9
+pydantic>=2.5
+
+# LLM (DeepSeek via OpenAI-compatible client)
+openai>=1.50.0
+
+# TTS
+elevenlabs>=2.46.0
+
+# Env
+python-dotenv>=1.0.0
+
+# RAG: embeddings locales ONNX (sin PyTorch, ~50MB runtime).
+# Necesario para que la imagen entre en Fly.io free tier (512MB RAM).
+fastembed>=0.4,<0.6
+
+# Notas: pyaudio y SpeechRecognition NO se usan en server (el STT corre
+# en el browser via Web Speech API). Removidos.

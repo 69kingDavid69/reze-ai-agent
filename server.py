@@ -119,7 +119,15 @@ el_client = ElevenLabs(api_key=os.getenv("ELEVENLABS_API_KEY"))
 deepseek = OpenAI(
     api_key=os.getenv("DEEPSEEK_API_KEY"),
     base_url="https://api.deepseek.com",
-    timeout=30,   # reasoner suele tardar más; subimos timeout
+    timeout=30,
+)
+
+# Groq — API OpenAI-compatible, usamos whisper-large-v3-turbo para STT en iOS.
+# No consume cuota de ElevenLabs — free tier de Groq es muy generoso (7200 seg/día).
+groq = OpenAI(
+    api_key=os.getenv("GROQ_API_KEY"),
+    base_url="https://api.groq.com/openai/v1",
+    timeout=30,
 )
 
 SESSION_TTL          = 7 * 24 * 3600   # 1 semana (antes era 1 hora)
@@ -544,27 +552,27 @@ def save_profile(req: ProfileRequest):
     })
 
 
-# ── Transcripción (STT) — para iOS Safari que no soporta Web Speech API ──
-# El frontend graba audio con MediaRecorder y lo manda acá. Usamos ElevenLabs
-# Scribe (mismo API key que TTS) para transcribir → devolvemos texto.
+# ── Transcripción (STT) — Groq Whisper ──────────────────────────────────────
+# Para iOS Safari (no soporta Web Speech API). El frontend graba con MediaRecorder
+# y manda el audio acá. Groq whisper-large-v3-turbo: rápido, preciso, free tier
+# generoso (7200 seg/día) — no consume cuota de ElevenLabs.
 @app.post("/transcribe")
 async def transcribe(file: UploadFile = File(...)):
     try:
         audio_bytes = await file.read()
         if not audio_bytes:
             raise HTTPException(status_code=400, detail="Empty audio")
-        # ElevenLabs Scribe espera un file-like object — wrap en BytesIO.
-        # diarize=False y language_code="spa" para fijar español → más preciso.
         from io import BytesIO
-        audio_io = BytesIO(audio_bytes)
-        audio_io.name = file.filename or "audio.mp4"
-        result = el_client.speech_to_text.convert(
-            file=audio_io,
-            model_id="scribe_v1",
-            language_code="spa",
-            diarize=False,
+        filename = file.filename or "audio.mp4"
+        audio_tuple = (filename, BytesIO(audio_bytes), file.content_type or "audio/mp4")
+        result = groq.audio.transcriptions.create(
+            file=audio_tuple,
+            model="whisper-large-v3-turbo",
+            language="es",
+            response_format="text",
         )
-        text = (getattr(result, "text", "") or "").strip()
+        # Con response_format="text" el resultado es el string directo
+        text = (result if isinstance(result, str) else getattr(result, "text", "")).strip()
         return JSONResponse({"text": text})
     except HTTPException:
         raise

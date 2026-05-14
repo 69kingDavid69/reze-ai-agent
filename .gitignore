@@ -28,3 +28,16 @@ static/live2d/March_7th/
 # Editores
 .vscode/
 .idea/
+
+# Base de datos runtime (se regenera sola)
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# Modelos 3D pesados (assets de desarrollo, no van en el deploy)
+models/
+static/models/
+
+# Herramientas de desarrollo Blender
+tools/

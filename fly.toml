@@ -1,9 +1,9 @@
-# fly.toml app configuration file generated for reze-anime on 2026-05-14T12:00:46-05:00
+# fly.toml app configuration file generated for reze-ai on 2026-05-14
 #
 # See https://fly.io/docs/reference/configuration/ for information about how to use this file.
 #
 
-app = 'reze-anime'
+app = 'reze-ai'
 primary_region = 'gru'
 
 [build]

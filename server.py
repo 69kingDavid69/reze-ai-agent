@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -8,11 +8,22 @@ from elevenlabs import VoiceSettings
 from openai import OpenAI
 from dataclasses import asdict
 import json
+import mimetypes
 import os
 import re
 import sqlite3
 import time
 from contextlib import contextmanager
+
+# Mime types custom para que iOS Safari NO intente decodificar archivos binarios
+# de Live2D como texto. Sin esto, .moc3 se sirve como text/plain; charset=utf-8
+# y iOS corrompe el modelo al cargarlo → Reze no aparece en iPhone.
+mimetypes.add_type("application/octet-stream", ".moc3")
+mimetypes.add_type("application/octet-stream", ".moc")
+mimetypes.add_type("application/json",         ".motion3.json")
+mimetypes.add_type("application/json",         ".exp3.json")
+mimetypes.add_type("application/json",         ".physics3.json")
+mimetypes.add_type("application/json",         ".cdi3.json")
 
 from persona import (
     REZE_SYSTEM_PROMPT,
@@ -483,6 +494,35 @@ def save_profile(req: ProfileRequest):
         "gender":   state.user_gender,
         "notes":    state.user_notes,
     })
+
+
+# ── Transcripción (STT) — para iOS Safari que no soporta Web Speech API ──
+# El frontend graba audio con MediaRecorder y lo manda acá. Usamos ElevenLabs
+# Scribe (mismo API key que TTS) para transcribir → devolvemos texto.
+@app.post("/transcribe")
+async def transcribe(file: UploadFile = File(...)):
+    try:
+        audio_bytes = await file.read()
+        if not audio_bytes:
+            raise HTTPException(status_code=400, detail="Empty audio")
+        # ElevenLabs Scribe espera un file-like object — wrap en BytesIO.
+        # diarize=False y language_code="spa" para fijar español → más preciso.
+        from io import BytesIO
+        audio_io = BytesIO(audio_bytes)
+        audio_io.name = file.filename or "audio.mp4"
+        result = el_client.speech_to_text.convert(
+            file=audio_io,
+            model_id="scribe_v1",
+            language_code="spa",
+            diarize=False,
+        )
+        text = (getattr(result, "text", "") or "").strip()
+        return JSONResponse({"text": text})
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[transcribe] error: {e}")
+        raise HTTPException(status_code=502, detail={"error": "transcribe_failed", "message": str(e)})
 
 
 class TTSRequest(BaseModel):

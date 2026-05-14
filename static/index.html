@@ -677,17 +677,20 @@
   persistProfile(profile)
   let sessionId = profile.sessionId
 
-  // ── Web Speech API – STT ──
-  // Detección de mobile: en mobile el modo conversación continuo no funciona bien
-  // (cada start() requiere user gesture en iOS, Chrome Android corta a los ~10s),
-  // así que cambiamos a modo single-shot manual.
-  const IS_MOBILE = /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
-  // Lang: 'es-AR' solo lo soporta Chrome desktop. En mobile/iOS fallback a 'es-ES'.
-  // 'es-419' (latam genérico) NO existe en Web Speech API — usar 'es-ES' o 'es-MX'.
+  // ── STT — Web Speech (desktop+Android) o MediaRecorder+backend (iOS) ──
+  // iOS Safari NO soporta webkitSpeechRecognition (silenciosamente falla).
+  // Para iOS grabamos audio con MediaRecorder y lo mandamos al backend
+  // que transcribe con ElevenLabs Scribe.
+  const IS_IOS = /iPhone|iPad|iPod/i.test(navigator.userAgent) ||
+                 (navigator.userAgent.includes('Mac') && 'ontouchend' in document)
+  const IS_MOBILE = IS_IOS || /Mobi|Android/i.test(navigator.userAgent)
+  // Lang: 'es-AR' solo lo soporta Chrome desktop. Mobile fallback a 'es-ES'.
   const STT_LANG = IS_MOBILE ? 'es-ES' : 'es-AR'
+  // Si es iOS, usamos backend STT siempre (Web Speech no funciona).
+  const USE_BACKEND_STT = IS_IOS
 
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
-  if (SpeechRecognition) {
+  if (SpeechRecognition && !USE_BACKEND_STT) {
     recognition = new SpeechRecognition()
     recognition.lang            = STT_LANG
     recognition.interimResults  = false
@@ -745,25 +748,106 @@
   }
 
   // Pre-warm de permiso de micrófono — en mobile esto evita el "mic activo pero no
-  // captura audio" porque el sistema de permisos no se inicializó. Se llama una
-  // sola vez al primer tap del mic.
+  // captura audio" porque el sistema de permisos no se inicializó.
   let micWarmed = false
   async function warmMicPermission() {
     if (micWarmed) return
     if (!navigator.mediaDevices?.getUserMedia) { micWarmed = true; return }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-      // Cerramos inmediatamente — solo queríamos los permisos. Recognition pedirá
-      // su propio stream cuando lo necesite.
       stream.getTracks().forEach(t => t.stop())
       micWarmed = true
     } catch (err) {
       console.warn('[mic-warm] permission denied or unavailable:', err)
-      micWarmed = true  // no reintentar — recognition fallará con su propio error
+      micWarmed = true
+    }
+  }
+
+  // ── iOS path: MediaRecorder + backend ──
+  let mediaRecorder = null
+  let recordedChunks = []
+  let recordingStream = null
+
+  async function startRecording() {
+    if (mediaRecorder && mediaRecorder.state === 'recording') return
+    try {
+      recordingStream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      // iOS Safari soporta audio/mp4 (AAC) y a veces audio/webm. Probamos mp4 primero.
+      const mimeCandidates = ['audio/mp4', 'audio/webm;codecs=opus', 'audio/webm', '']
+      let chosen = ''
+      for (const m of mimeCandidates) {
+        if (!m || MediaRecorder.isTypeSupported(m)) { chosen = m; break }
+      }
+      mediaRecorder = chosen
+        ? new MediaRecorder(recordingStream, { mimeType: chosen })
+        : new MediaRecorder(recordingStream)
+      recordedChunks = []
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) recordedChunks.push(e.data)
+      }
+      mediaRecorder.onstop = async () => {
+        const blob = new Blob(recordedChunks, { type: mediaRecorder.mimeType || 'audio/mp4' })
+        recordingStream?.getTracks().forEach(t => t.stop())
+        recordingStream = null
+        await transcribeBlob(blob)
+      }
+      mediaRecorder.start()
+      isListening = true
+      micBtn.classList.add('listening')
+      setStatus('Grabando... tocá el mic para parar.')
+      setLive2DState('escuchando')
+    } catch (err) {
+      console.warn('[recorder] failed:', err)
+      setStatus(err.name === 'NotAllowedError' ? 'Permiso de micrófono denegado.' : 'No se pudo grabar.')
+      isListening = false
+      micBtn.classList.remove('listening')
+    }
+  }
+
+  function stopRecording() {
+    if (mediaRecorder && mediaRecorder.state === 'recording') {
+      try { mediaRecorder.stop() } catch {}
+    }
+    isListening = false
+    micBtn.classList.remove('listening')
+  }
+
+  async function transcribeBlob(blob) {
+    setStatus('Transcribiendo...')
+    try {
+      const ext = (blob.type.includes('mp4') ? 'mp4' : blob.type.includes('webm') ? 'webm' : 'ogg')
+      const fd = new FormData()
+      fd.append('file', blob, `audio.${ext}`)
+      const res = await fetch('/transcribe', { method: 'POST', body: fd })
+      if (!res.ok) throw new Error('transcribe failed')
+      const data = await res.json()
+      const text = (data.text || '').trim()
+      if (text) {
+        setStatus('')
+        sendMessage(text)
+      } else {
+        setStatus('No te entendí. Probá de nuevo.')
+        setLive2DState('idle')
+      }
+    } catch (err) {
+      console.warn('[transcribe] error:', err)
+      setStatus('No se pudo transcribir.')
+      setLive2DState('idle')
     }
   }
 
   async function toggleMic() {
+    // ── iOS Safari path: MediaRecorder ──
+    if (USE_BACKEND_STT) {
+      if (isListening) {
+        stopRecording()
+      } else {
+        if (!micWarmed) await warmMicPermission()
+        await startRecording()
+      }
+      return
+    }
+    // ── Desktop/Android path: Web Speech API ──
     if (!recognition) { setStatus('Tu browser no soporta micrófono.'); return }
     if (convoMode) {
       convoMode = false
@@ -774,7 +858,6 @@
       setLive2DState('idle')
       return
     }
-    // En mobile, pedimos permiso de mic primero (acción explícita del usuario)
     if (IS_MOBILE && !micWarmed) {
       await warmMicPermission()
     }
